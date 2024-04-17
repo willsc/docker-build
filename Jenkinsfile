@@ -1,5 +1,5 @@
 #!/bin/bash 
-# FILEPATH: /Users/cwills/docker-build/Jenkinsfile
+
 
 pipeline {
   agent any
