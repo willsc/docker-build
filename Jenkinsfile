@@ -1,3 +1,5 @@
+# FILEPATH: /Users/cwills/docker-build/Jenkinsfile
+
 pipeline {
   agent any
   options {
@@ -5,24 +7,29 @@ pipeline {
     timestamps()
   }
   environment {
-    registry = "caronwills/docker-repo"
-    registryCredential = 'Docker-repo'        
+    registry="caronwills/docker-repo"
+    registryCredential='Docker-repo'
   }
   
   stages {
-    stage('Building image') {
+    stage('Install Docker') {
+      steps {
+        sh 'apt-get update'
+        sh 'apt-get install -y docker'
+      }
+    }
+    stage 'Building image' {
       steps {
         script {
-          dockerImage = docker.build registry + ":$BUILD_NUMBER"
+          dockerImage=$(docker build $registry:$BUILD_NUMBER)
         }
       }
     }
-    stage('Deploy Image') {
+    stage 'Deploy Image' {
       steps {
         script {
-          docker.withRegistry('', registryCredential) {
-            dockerImage.push()
-          }
+          docker login -u "$DOCKER_USERNAME" -p "$DOCKER_PASSWORD"
+          docker push $registry:$BUILD_NUMBER
         }
       }
     }
