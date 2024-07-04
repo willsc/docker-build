@@ -7,7 +7,7 @@ pipeline {
                 script {
                     git branch: 'main',
                         credentialsId: 'Jenkins-Github',
-                        url: 'ssh://git@github.com:willsc/docker-build.git'
+                        url: 'git@github.com:willsc/docker-build.git'
                 }
             }
         }
