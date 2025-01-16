@@ -1,0 +1,6 @@
+
+        print("Error executing the command:")
+        print(e.stderr)
+
+if __name__ == "__main__":
+    main()
