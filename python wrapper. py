@@ -1,0 +1,58 @@
+import argparse
+import getpass
+import subprocess
+from datetime import datetime
+
+def main():
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description="Search all CNEs for flows to/from a specific IP address.")
+    parser.add_argument("-u", "--user", required=True, help="Username for the built-in account")
+    parser.add_argument("-i", "--ipaddr", required=True, help="IP address to search flows for")
+    parser.add_argument("-p", "--ports", required=False, help="Ports (optional)", default="")
+    parser.add_argument("--starttime", required=True, help="Start time in format: 'YYYY-MM-DD HH:mm:ss'")
+    parser.add_argument("--endtime", required=True, help="End time in format: 'YYYY-MM-DD HH:mm:ss'")
+    args = parser.parse_args()
+
+    # Securely get the password
+    password = getpass.getpass(prompt="Enter password for the built-in account: ")
+
+    # Validate start and end times
+    try:
+        start_time = datetime.strptime(args.starttime, "%Y-%m-%d %H:%M:%S")
+        end_time = datetime.strptime(args.endtime, "%Y-%m-%d %H:%M:%S")
+        if start_time >= end_time:
+            raise ValueError("Start time must be before end time.")
+    except ValueError as ve:
+        print(f"Invalid date format or range: {ve}")
+        return
+
+    # API path (replace this with the correct script path)
+    api_path = "/local/1/home/svcegctp/rtb/toolkit/bin/CORVIL-API/CorvilApiStreamingClient.py"
+
+    # Command to execute
+    command = [
+        api_path,
+        f"flow-index BGXCNE0001.nd.barcapint.com",
+        f"starts='{start_time}'",
+        f"ends='{end_time}'",
+        "convert-bidirectional,ports,vports",
+        "-n", args.user,
+        "-p", password,
+        "-q", f"ip.addr={args.ipaddr}",
+        "|", "grep", "TCP"
+    ]
+
+    if args.ports:
+        command.append(f"-q port={args.ports}")
+
+    # Execute the command
+    try:
+        result = subprocess.run(" ".join(command), shell=True, check=True, capture_output=True, text=True)
+        print("Command output:")
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        print("Error executing the command:")
+        print(e.stderr)
+
+if __name__ == "__main__":
+    main()
