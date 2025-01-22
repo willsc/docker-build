@@ -1,0 +1,163 @@
+Here's the enhanced Prometheus exporter with caching functionality. This version adds a TTL-based cache to reduce API calls and maintain availability during temporary API outages:
+
+```python
+import time
+import logging
+import requests
+from prometheus_client import start_http_server, Gauge
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class CorvilExporter:
+    def __init__(self, api_url, api_key, interval=30, cache_ttl=300):
+        self.api_url = api_url
+        self.api_key = api_key
+        self.interval = interval
+        self.cache_ttl = cache_ttl
+        self.cached_data = None
+        self.last_fetch_time = 0
+        
+        # Initialize Prometheus metrics
+        self.latency_avg = Gauge('corvil_latency_seconds_avg', 
+                                'Average latency in seconds',
+                                ['service'])
+        self.latency_p50 = Gauge('corvil_latency_seconds_p50', 
+                                '50th percentile latency in seconds',
+                                ['service'])
+        self.latency_p90 = Gauge('corvil_latency_seconds_p90', 
+                                '90th percentile latency in seconds',
+                                ['service'])
+        self.latency_p99 = Gauge('corvil_latency_seconds_p99', 
+                                '99th percentile latency in seconds',
+                                ['service'])
+        self.request_rate = Gauge('corvil_requests_per_second',
+                                 'Requests per second',
+                                 ['service'])
+
+    def fetch_corvil_data(self):
+        """Fetch latency data from Corvil API with caching support"""
+        current_time = time.time()
+        
+        # Refresh data if cache is expired
+        if current_time - self.last_fetch_time >= self.cache_ttl:
+            try:
+                headers = {'Authorization': f'Bearer {self.api_key}'}
+                response = requests.get(f'{self.api_url}/latency-metrics', 
+                                      headers=headers,
+                                      timeout=5)
+                response.raise_for_status()
+                self.cached_data = response.json()
+                self.last_fetch_time = current_time
+                logger.info("Successfully updated cache from API")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"API fetch failed: {e}")
+                if self.cached_data:
+                    logger.warning("Using stale cached data")
+                else:
+                    logger.error("No cached data available")
+
+        return self.cached_data
+
+    def update_metrics(self, data):
+        """Update Prometheus metrics with fresh or cached data"""
+        if not data:
+            return
+
+        for service_metrics in data.get('services', []):
+            service_name = service_metrics.get('service_name')
+            if not service_name:
+                continue
+
+            # Update metrics with existing or cached values
+            self.latency_avg.labels(service=service_name).set(
+                service_metrics.get('average_latency', 0)
+            )
+            self.latency_p50.labels(service=service_name).set(
+                service_metrics.get('p50', 0)
+            )
+            self.latency_p90.labels(service=service_name).set(
+                service_metrics.get('p90', 0)
+            )
+            self.latency_p99.labels(service=service_name).set(
+                service_metrics.get('p99', 0)
+            )
+            self.request_rate.labels(service=service_name).set(
+                service_metrics.get('requests_per_second', 0)
+            )
+
+    def run(self):
+        """Main loop to manage cache and metrics updates"""
+        while True:
+            data = self.fetch_corvil_data()
+            self.update_metrics(data)
+            time.sleep(self.interval)
+
+if __name__ == '__main__':
+    # Configuration
+    API_URL = "https://corvil.example.com/api/v1"
+    API_KEY = "your-api-key-here"
+    EXPORTER_PORT = 8000
+    CACHE_TTL = 300  # 5 minutes
+    UPDATE_INTERVAL = 30  # 30 seconds
+
+    # Start Prometheus HTTP server
+    start_http_server(EXPORTER_PORT)
+    logger.info(f"Exporter started on port {EXPORTER_PORT}")
+
+    # Create and run exporter with caching
+    exporter = CorvilExporter(
+        api_url=API_URL,
+        api_key=API_KEY,
+        interval=UPDATE_INTERVAL,
+        cache_ttl=CACHE_TTL
+    )
+    exporter.run()
+```
+
+**Key Enhancements:**
+
+1. **Time-based Caching**:
+   - Added `cache_ttl` parameter (default 300s/5 minutes)
+   - Data is refreshed only when cache expires
+   - Maintains availability using cached data during API outages
+
+2. **Improved Error Handling**:
+   - Gracefully falls back to cached data on API failures
+   - Detailed logging for cache operations and API errors
+
+3. **Efficient API Usage**:
+   - Reduces API calls by serving cached data
+   - Configurable refresh interval independent of scraping frequency
+
+4. **New Configuration Options**:
+   ```python
+   # Adjust these values based on your requirements
+   CACHE_TTL = 300  # Seconds between API refreshes (5 minutes)
+   UPDATE_INTERVAL = 30  # Exporter's internal update check interval (30 seconds)
+   ```
+
+5. **Cache Status Monitoring** (Add these metrics if needed):
+   ```python
+   # Add to __init__ method
+   self.cache_age = Gauge('corvil_cache_age_seconds', 'Age of cached data in seconds')
+   self.cache_refresh_errors = Counter('corvil_cache_refresh_errors', 'API request errors count')
+
+   # Add to fetch_corvil_data error handling
+   self.cache_refresh_errors.inc()
+   ```
+
+**Usage Recommendations**:
+1. Set `UPDATE_INTERVAL` ≤ `CACHE_TTL` for optimal performance
+2. Monitor `corvil_cache_age_seconds` to ensure data freshness
+3. Alert on `corvil_cache_refresh_errors` to detect API issues
+4. Adjust `CACHE_TTL` based on your API rate limits and freshness requirements
+
+**Behavior**:
+- The exporter will attempt to refresh data every `CACHE_TTL` seconds
+- Serves stale data when API is unavailable but has valid cache
+- Metrics remain available during temporary network issues
+- Full API failure protection for up to `CACHE_TTL` seconds
+
+This implementation balances API load reduction with data freshness, while maintaining service availability during short-term outages.
