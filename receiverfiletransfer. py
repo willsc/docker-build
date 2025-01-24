@@ -1,0 +1,36 @@
+import socket
+
+SERVER_IP = "server_ip"  # Replace with the sender's IP address
+PORT = 9000              # Port to connect to the server
+SAVE_DIR = "path_to_save_files"  # Replace with the directory to save the downloaded files
+
+def receive_file(server_socket):
+    """Receive a file from the server."""
+    with open("received_file", "wb") as file:
+        while True:
+            data = server_socket.recv(4096)
+            if b"END\n" in data:
+                file.write(data.replace(b"END\n", b""))
+                break
+            file.write(data)
+
+def start_client():
+    """Start the file client."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        client_socket.connect((SERVER_IP, PORT))
+        print(client_socket.recv(1024).decode())  # Receive list of files
+        file_name = input("Enter the name of the file to download: ")
+        client_socket.sendall(file_name.encode())
+        
+        response = client_socket.recv(1024).decode()
+        if "ERROR" in response:
+            print(response)
+        elif "START" in response:
+            print("Downloading file...")
+            receive_file(client_socket)
+            print("File downloaded successfully.")
+        else:
+            print("Unexpected response from server.")
+
+if __name__ == "__main__":
+    start_client()
