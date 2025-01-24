@@ -1,0 +1,44 @@
+import socket
+import os
+
+HOST = "0.0.0.0"  # Bind to all available network interfaces
+PORT = 9000       # Port to listen for connections
+DIRECTORY = "path_to_files"  # Replace with the directory containing files to share
+
+def list_files():
+    """List files available in the directory."""
+    return "\n".join(os.listdir(DIRECTORY))
+
+def send_file(client_socket, file_name):
+    """Send a file to the client."""
+    file_path = os.path.join(DIRECTORY, file_name)
+    if not os.path.isfile(file_path):
+        client_socket.sendall(b"ERROR: File not found\n")
+        return
+    
+    client_socket.sendall(b"START\n")
+    with open(file_path, "rb") as file:
+        while chunk := file.read(4096):
+            client_socket.sendall(chunk)
+    client_socket.sendall(b"END\n")
+
+def start_server():
+    """Start the file server."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.bind((HOST, PORT))
+        server_socket.listen(1)
+        print(f"Serving files from {DIRECTORY} on port {PORT}")
+        
+        while True:
+            client_socket, client_address = server_socket.accept()
+            print(f"Connection from {client_address}")
+            with client_socket:
+                client_socket.sendall(b"Available files:\n")
+                client_socket.sendall(list_files().encode() + b"\n")
+                client_socket.sendall(b"Enter the file name to download: ")
+                
+                file_name = client_socket.recv(1024).decode().strip()
+                send_file(client_socket, file_name)
+
+if __name__ == "__main__":
+    start_server()
