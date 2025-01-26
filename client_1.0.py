@@ -41,9 +41,9 @@ def connect_with_retries(server_ip, server_port):
     raise ConnectionError(f"Failed to connect after {MAX_RETRIES} attempts. Last error: {last_exception}")
 
 
-def send_file(server_ip, server_port, file_path):
+def send_single_file(server_ip, server_port, file_path):
     """
-    Send 'file_path' to the server. Supports resume if the connection drops.
+    Send one file to the server with resume capability.
     Protocol:
       1. Send filename length + filename.
       2. Send file_size (8 bytes).
@@ -58,12 +58,12 @@ def send_file(server_ip, server_port, file_path):
     filename = os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
 
-    # Compute MD5 once, so we can send it at the end
+    # Compute MD5 once
     with open(file_path, 'rb') as f:
         file_data = f.read()
     md5_digest = hashlib.md5(file_data).digest()
 
-    offset = 0  # We'll track how many bytes have been sent
+    offset = 0  # How many bytes have been sent so far
 
     for retry in range(1, MAX_RETRIES + 1):
         sock = None
@@ -84,9 +84,10 @@ def send_file(server_ip, server_port, file_path):
             if len(raw_offset) < 8:
                 raise ConnectionError("Server closed prematurely while sending offset.")
             server_offset = struct.unpack('>Q', raw_offset)[0]
-            logger.info(f"Server reports offset={server_offset}. Resuming from here.")
+            logger.info(f"Server offset={server_offset}. Resuming from here (local offset={offset}).")
 
-            # If the server offset is beyond our current offset, we trust the server
+            # Update offset to whichever is larger:
+            # (If we already sent more data in a previous attempt, keep that.)
             offset = max(offset, server_offset)
 
             # 5) Send the remainder of the file from offset
@@ -101,7 +102,7 @@ def send_file(server_ip, server_port, file_path):
                     offset += len(chunk)
                     bytes_sent_this_attempt += len(chunk)
 
-            logger.info(f"Data transfer completed on attempt {retry}. Sent {bytes_sent_this_attempt} bytes. Total offset={offset}.")
+            logger.info(f"Transfer attempt {retry} complete for '{filename}'. Sent {bytes_sent_this_attempt} bytes. Local offset={offset}.")
 
             # 6) Send MD5 to server (16 bytes)
             sock.sendall(md5_digest)
@@ -114,45 +115,48 @@ def send_file(server_ip, server_port, file_path):
                 logger.info(f"MD5 match confirmed by server. File '{filename}' transferred successfully.")
                 return
             else:
-                logger.error(f"MD5 mismatch reported by server on attempt {retry}.")
-                # Potentially retry from scratch or handle error
-                # For simplicity, we'll raise an exception here.
+                logger.error(f"MD5 mismatch reported by server on attempt {retry} for file '{filename}'.")
+                # Potentially retry from scratch or handle differently
+                # We'll raise an exception to retry the entire file in this example.
                 raise ValueError("MD5 mismatch, transfer corrupted.")
 
         except (socket.timeout, ConnectionError, OSError) as e:
-            logger.error(f"Transfer error on attempt {retry}: {e}")
-            # If there's a failure mid-transfer, we can retry from the offset we had
-            # The next connection attempt will ask the server for its offset again.
+            logger.error(f"Transfer error on attempt {retry} for file '{filename}': {e}")
             if retry < MAX_RETRIES:
-                logger.info(f"Retrying in {RETRY_DELAY} seconds...")
+                logger.info(f"Retrying file '{filename}' in {RETRY_DELAY} seconds...")
                 time.sleep(RETRY_DELAY)
             else:
                 raise
         except Exception as e:
-            logger.exception(f"Unexpected error on attempt {retry}: {e}")
+            logger.exception(f"Unexpected error on attempt {retry} for file '{filename}': {e}")
             raise
         finally:
             if sock:
                 sock.close()
 
     # If we exhaust retries, raise an exception
-    raise ConnectionError("Max retries reached. Transfer failed.")
+    raise ConnectionError(f"Max retries reached for file '{filename}'. Transfer failed.")
 
 
 def main():
-    if len(sys.argv) != 4:
-        print(f"Usage: python {sys.argv[0]} <server_ip> <server_port> <file_path>")
+    if len(sys.argv) < 4:
+        print(f"Usage: python {sys.argv[0]} <server_ip> <server_port> <file1> [file2 file3 ...]")
         sys.exit(1)
 
     server_ip = sys.argv[1]
     server_port = int(sys.argv[2])
-    file_path = sys.argv[3]
+    file_paths = sys.argv[3:]  # One or more file paths
 
-    try:
-        send_file(server_ip, server_port, file_path)
-    except Exception as e:
-        logger.error(f"File transfer failed: {e}")
-        sys.exit(1)
+    for file_path in file_paths:
+        try:
+            logger.info(f"Sending file: {file_path}")
+            send_single_file(server_ip, server_port, file_path)
+        except Exception as e:
+            logger.error(f"Failed to send '{file_path}': {e}")
+            # Depending on requirements, you might continue with the next file or exit immediately.
+            # Here, we’ll continue to attempt the next file.
+            # If you want to stop on the first error, uncomment below:
+            # sys.exit(1)
 
 
 if __name__ == "__main__":
