@@ -34,7 +34,6 @@ def recv_exactly(conn, num_bytes):
         data += chunk
     return data
 
-
 def handle_client(conn, addr):
     """
     Handle a single client connection with resume support.
@@ -45,8 +44,8 @@ def handle_client(conn, addr):
       3. Check how many bytes have already been written (partial file).
       4. Respond with the current offset (8 bytes).
       5. Receive the remainder of the file from that offset.
-      6. Receive MD5 (16 bytes for the raw MD5 digest, or a known length).
-      7. Compute local MD5, compare, and return success/failure (1 byte).
+      6. Receive MD5 (16 bytes).
+      7. Compare local MD5 with client's MD5, respond success/failure.
     """
     conn.settimeout(TIMEOUT)
     logger.info(f"New connection from {addr}")
@@ -67,7 +66,7 @@ def handle_client(conn, addr):
         if os.path.exists(filename):
             offset = os.path.getsize(filename)
             if offset > total_file_size:
-                # If partial file is larger than total, we reset
+                # If partial file is bigger than total, reset it
                 offset = 0
 
         logger.info(f"Receiving file '{filename}' (size={total_file_size}). Current offset={offset}.")
@@ -92,8 +91,6 @@ def handle_client(conn, addr):
         logger.info(f"Finished receiving file data. Total={bytes_received} bytes for '{filename}'.")
 
         # 6) Receive the MD5 digest from client (16 bytes)
-        #    (We assume the client sends raw 16-byte MD5 digest).
-        #    Alternatively, the client might send a 32-byte hex string.
         client_md5 = recv_exactly(conn, 16)
 
         # Compute local MD5
@@ -103,10 +100,10 @@ def handle_client(conn, addr):
         # 7) Compare MD5 and respond
         if local_md5 == client_md5:
             logger.info(f"MD5 match for '{filename}'. Transfer successful.")
-            conn.sendall(b'\x01')  # 1 byte "success" indicator
+            conn.sendall(b'\x01')  # success indicator
         else:
             logger.error(f"MD5 mismatch for '{filename}'. Transfer corrupted.")
-            conn.sendall(b'\x00')  # 1 byte "failure" indicator
+            conn.sendall(b'\x00')  # failure indicator
 
     except ConnectionError as e:
         logger.error(f"Connection error from {addr}: {e}")
@@ -115,7 +112,6 @@ def handle_client(conn, addr):
     finally:
         conn.close()
         logger.info(f"Connection from {addr} closed.")
-
 
 def start_server():
     """
