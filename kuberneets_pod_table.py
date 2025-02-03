@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-python
+
 import argparse
 import csv
 from datetime import datetime
