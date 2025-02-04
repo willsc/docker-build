@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import argparse
 import csv
 from datetime import datetime
@@ -60,7 +59,10 @@ def main():
     args = parser.parse_args()
 
     try:
-        config.load_kube_config(config_file=args.kubeconfig) if args.kubeconfig else config.load_kube_config()
+        if args.kubeconfig:
+            config.load_kube_config(config_file=args.kubeconfig)
+        else:
+            config.load_kube_config()
     except Exception as e:
         print(f"Error loading kubeconfig: {e}")
         return
@@ -77,7 +79,7 @@ def main():
         print(f"No pods found in namespace {args.namespace}")
         return
 
-    # Calculate column widths
+    # Calculate column widths for pretty printing
     name_width = max(len(p[0]) for p in pod_data)
     status_width = max(len(p[1]) for p in pod_data)
     ready_width = max(len(p[2]) for p in pod_data)
@@ -86,7 +88,7 @@ def main():
     node_width = max(len(p[5]) for p in pod_data)
     age_width = max(len(p[6]) for p in pod_data)
 
-    # Print to console
+    # Print header to console
     header = (f"{'POD NAME':<{name_width}}  "
               f"{'STATUS':<{status_width}}  "
               f"{'READY':<{ready_width}}  "
@@ -96,6 +98,7 @@ def main():
               f"{'AGE':<{age_width}}")
     print(header)
     
+    # Print pod data to console
     for pod in pod_data:
         name, status, ready, restarts, ip, node, age = pod
         formatted_restarts = f"({restarts:>{restart_width}})"
@@ -107,14 +110,16 @@ def main():
               f"{node:<{node_width}}  "
               f"{age:<{age_width}}")
 
-    # Export to CSV
+    # Export to CSV with indexing starting at 1 on the second line
     if args.csv:
         try:
             with open(args.csv, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow(["Pod Name", "Status", "Ready", "Restarts", "IP", "Node", "Age"])
-                for pod in pod_data:
-                    writer.writerow(pod)
+                # Write header with an extra "Index" column
+                writer.writerow(["Index", "Pod Name", "Status", "Ready", "Restarts", "IP", "Node", "Age"])
+                # Write each pod row prefixed with an index
+                for idx, pod in enumerate(pod_data, start=1):
+                    writer.writerow([idx] + list(pod))
             print(f"\nCSV output saved to {args.csv}")
         except Exception as e:
             print(f"Error writing CSV file: {e}")
