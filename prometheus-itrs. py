@@ -1,0 +1,58 @@
+import requests
+import xml.etree.ElementTree as ET
+import time
+
+# Prometheus API Endpoint
+PROMETHEUS_URL = "http://localhost:9090/api/v1/query"
+PROMETHEUS_QUERY = 'up'  # Example query, replace with your metric
+
+# ITRS Netprobe Gateway Configuration
+ITRS_GATEWAY_XML_FILE = "/opt/itrs/gateway/dynamic-prometheus-data.xml"
+
+def fetch_prometheus_metrics():
+    """Fetches metric data from Prometheus"""
+    response = requests.get(PROMETHEUS_URL, params={"query": PROMETHEUS_QUERY})
+    
+    if response.status_code == 200:
+        data = response.json()
+        return data.get("data", {}).get("result", [])
+    else:
+        print("Error fetching data from Prometheus:", response.text)
+        return []
+
+def generate_itrs_xml(metrics):
+    """Generates XML formatted data for ITRS ingestion"""
+    root = ET.Element("geneos")
+    directory = ET.SubElement(root, "directory", name="Prometheus Metrics")
+
+    for metric in metrics:
+        metric_name = metric.get("metric", {}).get("__name__", "unknown")
+        metric_value = metric.get("value", [None, 0])[1]
+
+        # Create dataview
+        dataview = ET.SubElement(directory, "dataview", name=metric_name)
+        row = ET.SubElement(dataview, "row", name=metric_name)
+        ET.SubElement(row, "cell", name="value").text = str(metric_value)
+
+    return ET.tostring(root, encoding="utf-8", method="xml").decode("utf-8")
+
+def write_to_itrs(xml_data):
+    """Writes generated XML to ITRS dynamic data file"""
+    with open(ITRS_GATEWAY_XML_FILE, "w") as file:
+        file.write(xml_data)
+
+def main():
+    """Main function to fetch, format, and send data to ITRS"""
+    while True:
+        metrics = fetch_prometheus_metrics()
+        if metrics:
+            xml_data = generate_itrs_xml(metrics)
+            write_to_itrs(xml_data)
+            print("ITRS data updated.")
+        else:
+            print("No valid metrics retrieved.")
+
+        time.sleep(30)  # Adjust polling interval
+
+if __name__ == "__main__":
+    main()
