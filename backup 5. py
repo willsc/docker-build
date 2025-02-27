@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Backup script using tar over SSH (no tar snapshot) with gzipped archives,
-supporting full or incremental (current-day) backups, CSV summary logging,
-host re-run capability, and an option to overwrite or append the summary CSV.
+Backup script using tar over SSH (without tar snapshots) with gzipped archives,
+supporting full or incremental backups based on file creation/modification time,
+CSV summary logging, host re-run capability, and logic to determine whether
+to backup files from today or the previous day.
 
 Configuration is read from a JSON file (default "backup_config.json") that should look like:
 
@@ -30,16 +31,20 @@ Configuration is read from a JSON file (default "backup_config.json") that shoul
     ]
 }
 
-By default (or when using --incremental) the script will back up only the files
-that were created or modified on the current day. The --full flag will back up the entire directory.
-
+Backup mode options:
+  --full           Force a full backup (all files in the directory).
+  --incremental    Force an incremental backup.
+                   In incremental mode, the script determines a backup date as follows:
+                     • If the backup is started before midnight (i.e. after a cutoff hour),
+                       then it backs up files created (modified) since midnight today.
+                     • If the backup is started early after midnight (before the cutoff hour),
+                       then it backs up files created between yesterday’s midnight and today’s midnight.
+  
 Additional options:
-  --log-file         Specify a log file path.
-  --summary-file     Specify a CSV summary file path (default: backup_summary.csv).
-  --overwrite-summary  If set, the summary CSV file is overwritten (cleared) on each run.
-  --target-host      Specify one or more hosts (comma-separated) to run the backup for.
-  --full             Force a full backup.
-  --incremental      Force an incremental backup (current-day only).
+  --log-file         Specify a log file.
+  --summary-file     Specify a CSV summary file (default: backup_summary.csv).
+  --overwrite-summary  Overwrite the summary CSV file rather than appending.
+  --target-host      Specify one or more hosts (comma‑separated) to run the backup for.
   
 Ensure that passwordless SSH is configured.
 """
@@ -61,21 +66,27 @@ def load_config(config_file):
         logging.error("Error reading config file %s: %s", config_file, e)
         sys.exit(1)
 
-def run_remote_backup(ssh_user, host, remote_path, backup_mode, date_str=None):
+def run_remote_backup(ssh_user, host, remote_path, backup_mode, threshold_date=None, upper_date=None):
     """
-    Run a remote tar command via SSH.
+    Run a remote backup command via SSH.
     
-    For a full backup, it will archive the entire directory.
-    For an incremental backup, it uses 'find' to list files modified
-    on or after date_str (in 'YYYY-MM-DD' format) and pipes that list to tar.
+    For a full backup, archive the entire remote_path.
+    For an incremental backup:
+      - If upper_date is provided, archive only files modified on or after threshold_date
+        and strictly before upper_date.
+      - Otherwise, archive files modified on or after threshold_date.
     """
     if backup_mode == "full":
-        # Archive the entire remote_path.
         cmd = f"cd {remote_path} && tar -czf - ."
     elif backup_mode == "incremental":
-        # Archive only files modified on or after the given date.
-        # Uses GNU find's -newermt option.
-        cmd = f"cd {remote_path} && find . -type f -newermt '{date_str}' | tar -czf - -T -"
+        if upper_date:
+            # Backup only files modified between threshold_date (inclusive)
+            # and upper_date (exclusive).
+            cmd = (f"cd {remote_path} && find . -type f -newermt '{threshold_date}' "
+                   f"! -newermt '{upper_date}' | tar -czf - -T -")
+        else:
+            # Backup files modified on or after threshold_date.
+            cmd = f"cd {remote_path} && find . -type f -newermt '{threshold_date}' | tar -czf - -T -"
     else:
         logging.error("Unknown backup mode: %s", backup_mode)
         return None
@@ -105,25 +116,25 @@ def write_summary(summary_file, timestamp, host, filesystem, status):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Backup script using tar over SSH with gzipped archives, full/incremental (current-day) backups, CSV summary, host re-run capability, and summary file overwrite option."
+        description="Backup script using tar over SSH with gzipped archives, full/incremental backups based on file creation time, CSV summary, and host re-run capability."
     )
     parser.add_argument("--config", type=str, default="backup_config.json",
                         help="Path to the configuration file (default: backup_config.json)")
     parser.add_argument("--full", action="store_true",
                         help="Force a full backup (all files).")
     parser.add_argument("--incremental", action="store_true",
-                        help="Force an incremental backup (only files created/modified today).")
+                        help="Force an incremental backup (only files created/modified in the specified period).")
     parser.add_argument("--log-file", type=str,
-                        help="Path to a log file where log messages will be written (in addition to console).")
+                        help="Path to a log file (in addition to console).")
     parser.add_argument("--summary-file", type=str, default="backup_summary.csv",
                         help="Path to the CSV summary file (default: backup_summary.csv)")
     parser.add_argument("--overwrite-summary", action="store_true",
-                        help="If set, the summary CSV file is overwritten rather than appended to.")
+                        help="Overwrite the summary CSV file rather than append.")
     parser.add_argument("--target-host", type=str,
-                        help="If specified, only run the backup for the given host name (or comma-separated list of hosts).")
+                        help="If specified, run the backup only for the given host (or comma-separated list of hosts).")
     args = parser.parse_args()
 
-    # Set up logging handlers.
+    # Set up logging.
     log_handlers = [logging.StreamHandler(sys.stdout)]
     if args.log_file:
         try:
@@ -142,7 +153,7 @@ def main():
 
     config = load_config(args.config)
     
-    # If overwrite-summary is specified, remove any existing summary file.
+    # If --overwrite-summary is specified, remove any existing summary file.
     if args.overwrite_summary and os.path.exists(args.summary_file):
         try:
             os.remove(args.summary_file)
@@ -151,7 +162,7 @@ def main():
             logging.error("Failed to remove existing summary file %s: %s", args.summary_file, e)
             sys.exit(1)
     
-    # Process target host(s) if specified.
+    # Process target hosts if specified.
     target_hosts = None
     if args.target_host:
         target_hosts = [h.strip() for h in args.target_host.split(',')]
@@ -164,7 +175,6 @@ def main():
     archive_filename_format = config.get("archive_filename_format", "backup_%Y-%m-%d_%H%M%S.tar.gz")
     
     # Determine backup mode.
-    # By default, if neither --full nor --incremental is specified, we default to incremental.
     if args.full:
         backup_mode = "full"
         logging.info("Forced full backup requested.")
@@ -173,12 +183,29 @@ def main():
         logging.info("Forced incremental backup requested.")
     else:
         backup_mode = "incremental"
-        logging.info("No backup mode forced; defaulting to incremental (current-day) backup.")
+        logging.info("No backup mode forced; defaulting to incremental backup.")
 
-    # For incremental backups, we want only files created/modified today.
-    today = datetime.date.today()
-    date_str = today.strftime("%Y-%m-%d")
+    # Determine which date to use as threshold for incremental backup.
+    # We use a cutoff hour (default 4 AM). If the current time is before 4 AM,
+    # then assume the backup is running after midnight and should cover yesterday's files.
+    # Otherwise, use today's date.
     now = datetime.datetime.now()
+    cutoff_hour = 4
+    if now.hour < cutoff_hour:
+        backup_date = now.date() - datetime.timedelta(days=1)
+        logging.info("Backup started early (hour %d < %d). Using previous day's date: %s", now.hour, cutoff_hour, backup_date)
+    else:
+        backup_date = now.date()
+        logging.info("Backup started later (hour %d >= %d). Using current day's date: %s", now.hour, cutoff_hour, backup_date)
+    backup_date_str = backup_date.strftime("%Y-%m-%d")
+    today_str = now.date().strftime("%Y-%m-%d")
+    
+    # For incremental backups, if backup_date is less than today's date,
+    # we will only include files modified between backup_date (inclusive) and today's date (exclusive).
+    if backup_mode == "incremental" and backup_date < now.date():
+        upper_date = today_str
+    else:
+        upper_date = None
 
     # Process each host and filesystem.
     for host in config["hosts"]:
@@ -192,13 +219,16 @@ def main():
             remote_path = fs["path"]
             backup_success = True  # Assume success unless an error occurs.
             try:
-                proc = run_remote_backup(ssh_user, host_name, remote_path, backup_mode, date_str)
+                if backup_mode == "full":
+                    proc = run_remote_backup(ssh_user, host_name, remote_path, "full")
+                else:
+                    proc = run_remote_backup(ssh_user, host_name, remote_path, "incremental", backup_date_str, upper_date)
                 if proc is None:
                     backup_success = False
                     continue
                 # Determine local archive file.
                 if archive_enabled:
-                    archive_subdir = os.path.join(archive_base, host_name, fs_name, today.strftime(archive_dir_format))
+                    archive_subdir = os.path.join(archive_base, host_name, fs_name, backup_date_str)
                     os.makedirs(archive_subdir, exist_ok=True)
                     archive_filename = now.strftime(archive_filename_format)
                     local_archive_file = os.path.join(archive_subdir, archive_filename)
