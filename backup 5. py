@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Backup script using tar over SSH (no tar snapshot) with gzipped archives,
-support for full or incremental (current-day) backups, CSV summary logging,
-and the ability to re-run backups for specified hosts.
+supporting full or incremental (current-day) backups, CSV summary logging,
+host re-run capability, and an option to overwrite or append the summary CSV.
 
 Configuration is read from a JSON file (default "backup_config.json") that should look like:
 
@@ -31,14 +31,15 @@ Configuration is read from a JSON file (default "backup_config.json") that shoul
 }
 
 By default (or when using --incremental) the script will back up only the files
-that were created (modified) on the current day. The --full flag will back up the entire directory.
+that were created or modified on the current day. The --full flag will back up the entire directory.
 
 Additional options:
-  --log-file       Specify a log file path.
-  --summary-file   Specify a CSV summary file path (default: backup_summary.csv).
-  --target-host    Specify one or more hosts (comma-separated) to run the backup for.
-  --full           Force a full backup.
-  --incremental    Force an incremental (current-day) backup.
+  --log-file         Specify a log file path.
+  --summary-file     Specify a CSV summary file path (default: backup_summary.csv).
+  --overwrite-summary  If set, the summary CSV file is overwritten (cleared) on each run.
+  --target-host      Specify one or more hosts (comma-separated) to run the backup for.
+  --full             Force a full backup.
+  --incremental      Force an incremental backup (current-day only).
   
 Ensure that passwordless SSH is configured.
 """
@@ -66,14 +67,14 @@ def run_remote_backup(ssh_user, host, remote_path, backup_mode, date_str=None):
     
     For a full backup, it will archive the entire directory.
     For an incremental backup, it uses 'find' to list files modified
-    on or after date_str (which should be in 'YYYY-MM-DD' format) and pipes that list to tar.
+    on or after date_str (in 'YYYY-MM-DD' format) and pipes that list to tar.
     """
     if backup_mode == "full":
         # Archive the entire remote_path.
         cmd = f"cd {remote_path} && tar -czf - ."
     elif backup_mode == "incremental":
         # Archive only files modified on or after the given date.
-        # Note: This uses GNU find’s -newermt which compares against a human-readable date.
+        # Uses GNU find's -newermt option.
         cmd = f"cd {remote_path} && find . -type f -newermt '{date_str}' | tar -czf - -T -"
     else:
         logging.error("Unknown backup mode: %s", backup_mode)
@@ -89,18 +90,22 @@ def run_remote_backup(ssh_user, host, remote_path, backup_mode, date_str=None):
 
 def write_summary(summary_file, timestamp, host, filesystem, status):
     """Append a summary line to the CSV summary file."""
-    file_exists = os.path.exists(summary_file)
+    # If the file doesn't exist, write a header first.
+    if not os.path.exists(summary_file):
+        header = "timestamp,host,filesystem,status\n"
+    else:
+        header = ""
     try:
         with open(summary_file, "a") as f:
-            if not file_exists:
-                f.write("timestamp,host,filesystem,status\n")
+            if header:
+                f.write(header)
             f.write(f"{timestamp},{host},{filesystem},{status}\n")
     except Exception as e:
         logging.error("Failed to write summary to %s: %s", summary_file, e)
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Backup script using tar over SSH with gzipped archives, full/incremental backups (by current day), CSV summary, and host re-run capability."
+        description="Backup script using tar over SSH with gzipped archives, full/incremental (current-day) backups, CSV summary, host re-run capability, and summary file overwrite option."
     )
     parser.add_argument("--config", type=str, default="backup_config.json",
                         help="Path to the configuration file (default: backup_config.json)")
@@ -112,6 +117,8 @@ def main():
                         help="Path to a log file where log messages will be written (in addition to console).")
     parser.add_argument("--summary-file", type=str, default="backup_summary.csv",
                         help="Path to the CSV summary file (default: backup_summary.csv)")
+    parser.add_argument("--overwrite-summary", action="store_true",
+                        help="If set, the summary CSV file is overwritten rather than appended to.")
     parser.add_argument("--target-host", type=str,
                         help="If specified, only run the backup for the given host name (or comma-separated list of hosts).")
     args = parser.parse_args()
@@ -135,6 +142,15 @@ def main():
 
     config = load_config(args.config)
     
+    # If overwrite-summary is specified, remove any existing summary file.
+    if args.overwrite_summary and os.path.exists(args.summary_file):
+        try:
+            os.remove(args.summary_file)
+            logging.info("Existing summary file %s removed (overwrite mode).", args.summary_file)
+        except Exception as e:
+            logging.error("Failed to remove existing summary file %s: %s", args.summary_file, e)
+            sys.exit(1)
+    
     # Process target host(s) if specified.
     target_hosts = None
     if args.target_host:
@@ -148,7 +164,7 @@ def main():
     archive_filename_format = config.get("archive_filename_format", "backup_%Y-%m-%d_%H%M%S.tar.gz")
     
     # Determine backup mode.
-    # By default, if neither --full nor --incremental is specified, we default to incremental (current-day backup).
+    # By default, if neither --full nor --incremental is specified, we default to incremental.
     if args.full:
         backup_mode = "full"
         logging.info("Forced full backup requested.")
@@ -161,7 +177,7 @@ def main():
 
     # For incremental backups, we want only files created/modified today.
     today = datetime.date.today()
-    date_str = today.strftime("%Y-%m-%d")  # This string is used with -newermt.
+    date_str = today.strftime("%Y-%m-%d")
     now = datetime.datetime.now()
 
     # Process each host and filesystem.
@@ -174,13 +190,9 @@ def main():
         for fs in host["filesystems"]:
             fs_name = fs["name"]
             remote_path = fs["path"]
-            backup_success = True  # Assume success until an error occurs.
+            backup_success = True  # Assume success unless an error occurs.
             try:
-                # Run the appropriate remote backup command.
-                if backup_mode == "full":
-                    proc = run_remote_backup(ssh_user, host_name, remote_path, "full")
-                else:
-                    proc = run_remote_backup(ssh_user, host_name, remote_path, "incremental", date_str)
+                proc = run_remote_backup(ssh_user, host_name, remote_path, backup_mode, date_str)
                 if proc is None:
                     backup_success = False
                     continue
