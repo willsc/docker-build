@@ -1,0 +1,50 @@
+#!/bin/bash
+# run_backup.sh
+# This script serves as a wrapper to call the Python backup script.
+# It passes along configuration, log, and summary file parameters.
+# If no mode argument is supplied, the script defaults to incremental mode.
+
+# Adjust these paths as needed.
+PYTHON_SCRIPT="/opt/backup/backup_script.py"
+CONFIG_FILE="/opt/backup/backup_config.json"
+LOG_FILE="/var/log/backup_script.log"
+SUMMARY_FILE="/var/log/backup_summary.csv"
+
+# If no arguments are provided, default to incremental mode.
+if [ "$#" -eq 0 ]; then
+    MODE="--incremental"
+else
+    MODE="$@"
+fi
+
+echo "Starting backup with mode: $MODE" >> "$LOG_FILE"
+python3 "$PYTHON_SCRIPT" --config "$CONFIG_FILE" $MODE --log-file "$LOG_FILE" --summary-file "$SUMMARY_FILE"
+exit $?
+
+
+
+insert_job: BACKUP_INCREMENTAL   job_type: c
+command: /opt/backup/run_backup.sh --incremental
+machine: backup_machine
+owner: backup_user
+permission: wx
+date_conditions: 1
+days_of_week: mo,tu,we,th,fr,sa,su
+start_times: "04:10"
+description: "Daily incremental backup run"
+std_out_file: /var/log/backup_incremental.out
+std_err_file: /var/log/backup_incremental.err
+
+
+
+insert_job: BACKUP_FULL   job_type: c
+command: /opt/backup/run_backup.sh --full
+machine: backup_machine
+owner: backup_user
+permission: wx
+date_conditions: 1
+days_of_week: sat
+start_times: "04:15"
+description: "Weekly full backup run on Saturday"
+std_out_file: /var/log/backup_full.out
+std_err_file: /var/log/backup_full.err
