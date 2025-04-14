@@ -1,0 +1,77 @@
+import paramiko
+import csv
+import time
+from datetime import datetime
+
+# === CONFIGURABLE SECTION ===
+HOSTS = [
+    {
+        "host": "host1.example.com",
+        "username": "your_user",
+        "csv_paths": {
+            "file1": "/remote/path/to/file1.csv",
+            "file2": "/remote/path/to/file2.csv",
+            "file3": "/remote/path/to/file3.csv"
+        }
+    },
+    # Add more hosts as needed
+]
+
+OUTPUT_FILE = "csv_check_results.csv"
+# =============================
+
+
+def check_file_lines_via_ssh(host, username, filepath):
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(hostname=host, username=username)
+
+        stdin, stdout, stderr = ssh.exec_command(f"wc -l < '{filepath}'")
+        output = stdout.read().decode().strip()
+        ssh.close()
+
+        return int(output) if output.isdigit() else None
+    except Exception as e:
+        print(f"Error connecting to {host} or reading file {filepath}: {e}")
+        return None
+
+
+def evaluate_conditions(counts):
+    return int(
+        counts.get("file1", 0) > 111 and
+        counts.get("file2", 0) >= 40 and
+        counts.get("file3", 0) >= 40
+    )
+
+
+def main():
+    timestamp = datetime.utcnow().isoformat()
+    results = []
+
+    for host in HOSTS:
+        host_name = host["host"]
+        username = host["username"]
+        file_paths = host["csv_paths"]
+        line_counts = {}
+
+        for key, path in file_paths.items():
+            count = check_file_lines_via_ssh(host_name, username, path)
+            line_counts[key] = count if count is not None else 0
+
+        result = evaluate_conditions(line_counts)
+        for fname, count in line_counts.items():
+            results.append([timestamp, host_name, fname, count, result])
+
+    with open(OUTPUT_FILE, "a", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Timestamp", "Host", "File", "LineCount", "Result"])
+        for row in results:
+            writer.writerow(row)
+
+    print(f"Results written to {OUTPUT_FILE}")
+
+
+if __name__ == "__main__":
+    main()
