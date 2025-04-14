@@ -1,0 +1,94 @@
+import paramiko
+import csv
+from datetime import datetime
+
+# === CONFIGURE YOUR HOSTS AND FILE PATHS ===
+HOSTS = [
+    {
+        "host": "host1.example.com",
+        "username": "your_ssh_user",
+        "csv_paths": {
+            "file1": "/remote/path/to/file1.csv",
+            "file2": "/remote/path/to/file2.csv",
+            "file3": "/remote/path/to/file3.csv"
+        }
+    },
+    # Add more hosts if needed
+]
+
+OUTPUT_FILE = "csv_check_results.csv"
+
+
+def connect_ssh(host, username):
+    ssh = paramiko.SSHClient()
+    ssh.load_system_host_keys()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    try:
+        # Attempt to use system's SSH agent or default keys
+        ssh.connect(
+            hostname=host,
+            username=username,
+            allow_agent=True,
+            look_for_keys=True,
+            timeout=10
+        )
+        return ssh
+    except Exception as e:
+        print(f"SSH connection failed to {host}: {e}")
+        return None
+
+
+def check_file_lines(ssh, filepath):
+    try:
+        stdin, stdout, stderr = ssh.exec_command(f"wc -l < '{filepath}'")
+        output = stdout.read().decode().strip()
+        return int(output) if output.isdigit() else 0
+    except Exception as e:
+        print(f"Failed to count lines for {filepath}: {e}")
+        return 0
+
+
+def evaluate_conditions(counts):
+    return int(
+        counts.get("file1", 0) > 111 and
+        counts.get("file2", 0) >= 40 and
+        counts.get("file3", 0) >= 40
+    )
+
+
+def main():
+    timestamp = datetime.utcnow().isoformat()
+    all_results = []
+
+    for entry in HOSTS:
+        host = entry["host"]
+        user = entry["username"]
+        paths = entry["csv_paths"]
+
+        ssh = connect_ssh(host, user)
+        if not ssh:
+            continue
+
+        line_counts = {}
+        for key, path in paths.items():
+            count = check_file_lines(ssh, path)
+            line_counts[key] = count
+
+        ssh.close()
+
+        result_flag = evaluate_conditions(line_counts)
+        for fname, count in line_counts.items():
+            all_results.append([timestamp, host, fname, count, result_flag])
+
+    with open(OUTPUT_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        if f.tell() == 0:
+            writer.writerow(["Timestamp", "Host", "File", "LineCount", "Result"])
+        writer.writerows(all_results)
+
+    print(f"Results written to {OUTPUT_FILE}")
+
+
+if __name__ == "__main__":
+    main()
