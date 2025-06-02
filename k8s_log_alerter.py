@@ -3,6 +3,27 @@
 Kubernetes Namespace Log Alerter
 A focused log monitoring and alerting system for specific Kubernetes namespaces.
 Detects disconnections, Java exceptions, and creates CSV error indexes.
+# Create sample patterns file
+python k8s_log_alerter.py --create-patterns
+
+# Use default patterns
+python k8s_log_alerter.py --namespace production
+
+# Use custom patterns file
+python k8s_log_alerter.py --namespace production --patterns-file my_patterns.txt
+
+# Full example with all options
+python k8s_log_alerter.py \
+  --namespace production \
+  --kubeconfig ~/.kube/prod-config \
+  --patterns-file alert_patterns.txt \
+  --csv-path /var/log/prod_errors.csv \
+  --verbose
+
+
+
+
+
 """
 
 import json
