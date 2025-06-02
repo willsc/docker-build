@@ -2,6 +2,20 @@
 """
 Enhanced Kubernetes Pod File Compression Checker
 With support for pod filtering, dry-run mode, and container selection
+
+# Basic script with custom kubeconfig
+python pod_file_checker.py -n production -p /var/log/journals -k ~/.kube/prod-config
+
+# Enhanced script with custom kubeconfig
+python enhanced_k8s_checker.py -n production -p /var/log/journals --kubeconfig ~/configs/cluster-config.yaml
+
+# Using environment variable (alternative method)
+export KUBECONFIG=~/my-custom-config.yaml
+python enhanced_k8s_checker.py -n production -p /var/log/journals
+
+
+
+
 """
 
 import os
